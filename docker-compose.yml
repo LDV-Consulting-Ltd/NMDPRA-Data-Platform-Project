@@ -1,0 +1,175 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nmdpra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nmdpra_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-nmdpra_data}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/02-create-airflow-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nmdpra} -d ${POSTGRES_DB:-nmdpra_data}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: pipelines/airflow/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      NMDPRA_DB_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
+    volumes:
+      - ./pipelines/airflow/dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./parsers:/opt/airflow/parsers
+      - ./scripts:/opt/airflow/scripts
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: pipelines/airflow/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-webserver:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      NMDPRA_DB_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
+    volumes:
+      - ./pipelines/airflow/dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./parsers:/opt/airflow/parsers
+      - ./scripts:/opt/airflow/scripts
+    command: scheduler
+
+  # Runs once on stack startup: wait for Airflow, trigger DAG once, then exit. No schedule.
+  pipeline_bootstrap:
+    image: apache/airflow:2.7.3-python3.11
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+      airflow-scheduler:
+        condition: service_started
+    environment:
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        echo "Waiting for Airflow REST..."
+        i=0
+        while [ $$i -lt 90 ]; do
+          if curl -sf -u "$${AIRFLOW_USERNAME}:$${AIRFLOW_PASSWORD}" "http://airflow-webserver:8080/api/v1/health" >/dev/null; then
+            echo "Airflow is healthy."
+            break
+          fi
+          i=$$((i+1))
+          sleep 2
+        done
+        if [ $$i -eq 90 ]; then
+          echo "Timeout waiting for Airflow."
+          exit 1
+        fi
+        echo "Triggering DAG run (startup)..."
+        curl -sf -X POST -u "$${AIRFLOW_USERNAME}:$${AIRFLOW_PASSWORD}" \
+          "http://airflow-webserver:8080/api/v1/dags/nmdpra_end_to_end_dag/dagRuns" \
+          -H "Content-Type: application/json" \
+          -d '{"conf":{"triggered_by":"startup"}}' || true
+        echo "Startup trigger done."
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      AIRFLOW_API_BASE: http://airflow-webserver:8080/api/v1
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+      ADMIN_RUN_TOKEN: ${ADMIN_RUN_TOKEN:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Server-side only: used by /api/pipeline/* routes to call FastAPI with token
+      ADMIN_RUN_TOKEN: ${ADMIN_RUN_TOKEN:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+    command: npm run dev
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    profiles:
+      - full
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@nmdpra.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    profiles:
+      - full
+
+volumes:
+  postgres_data: {}
+  minio_data: {}
