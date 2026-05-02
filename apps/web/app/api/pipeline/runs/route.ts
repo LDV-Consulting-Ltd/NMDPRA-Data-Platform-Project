@@ -3,14 +3,16 @@
  * Token is read from env on the server; never sent to the browser.
  */
 import { NextRequest, NextResponse } from 'next/server';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const ADMIN_TOKEN = process.env.ADMIN_RUN_TOKEN;
+import { backendApiBase } from '@/lib/backend-url';
 
 export async function GET(request: NextRequest) {
+  const ADMIN_TOKEN = process.env.ADMIN_RUN_TOKEN;
   if (!ADMIN_TOKEN) {
     return NextResponse.json(
-      { error: 'Pipeline runs not configured (ADMIN_RUN_TOKEN missing)' },
+      {
+        error: 'Pipeline runs not configured (ADMIN_RUN_TOKEN missing)',
+        detail: 'Set ADMIN_RUN_TOKEN in repo root .env or apps/web/.env.local',
+      },
       { status: 503 }
     );
   }
@@ -19,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const res = await fetch(
-      `${API_BASE}/v1/admin/pipeline/runs?limit=${limit}`,
+      `${backendApiBase()}/v1/admin/pipeline/runs?limit=${limit}`,
       {
         headers: {
           'X-Admin-Token': ADMIN_TOKEN,

@@ -88,9 +88,18 @@ def get_report(file_id: str, db=Depends(get_db)):
     return {"data": d, "last_updated": datetime.utcnow().isoformat() + "Z"}
 
 
+# Expected NMDPRA report sources — shown in Governance when no files downloaded yet
+COVERAGE_EXPECTED_SOURCES = [
+    "oilgasdata",
+    "vesselschedule",
+    "dailytruckout",
+    "stockreport",
+]
+
+
 @router.get("/coverage", response_model=dict)
 def coverage(db=Depends(get_db)):
-    """GET /v1/coverage - coverage per dataset + last updated."""
+    """GET /v1/coverage - coverage per dataset + last updated. When no downloads, returns expected sources with data_status no_data."""
     r = db.execute(text("""
         SELECT source_name, status, MIN(report_period) as min_period, MAX(report_period) as max_period,
                MAX(downloaded_at) as last_downloaded
@@ -100,7 +109,9 @@ def coverage(db=Depends(get_db)):
     """))
     rows = r.fetchall()
     data = []
+    seen_sources = set()
     for row in rows:
+        seen_sources.add(row[0])
         data.append({
             "source_name": row[0],
             "data_status": row[1],
@@ -108,4 +119,16 @@ def coverage(db=Depends(get_db)):
             "max_period": row[3].isoformat() if row[3] else None,
             "last_updated": row[4].isoformat() if row[4] else None,
         })
+    # When no (or partial) data, ensure expected sources appear with no_data so Governance shows something
+    for src in COVERAGE_EXPECTED_SOURCES:
+        if src not in seen_sources:
+            data.append({
+                "source_name": src,
+                "data_status": "no_data",
+                "min_period": None,
+                "max_period": None,
+                "last_updated": None,
+            })
+    # Sort so no_data sources are grouped after those with data
+    data.sort(key=lambda x: (0 if x["data_status"] != "no_data" else 1, x["source_name"]))
     return {"data": data, "last_updated": datetime.utcnow().isoformat() + "Z"}

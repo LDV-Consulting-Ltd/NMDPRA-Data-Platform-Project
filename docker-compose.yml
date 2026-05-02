@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -11,12 +9,54 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/02-create-airflow-db.sh:ro
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/02-create-airflow-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nmdpra} -d ${POSTGRES_DB:-nmdpra_data}"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  create_airflow_db:
+    image: postgres:15-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-nmdpra}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-nmdpra_secret}
+      PGDATABASE: postgres
+    command: ["sh", "-c", "psql -v ON_ERROR_STOP=0 -c 'CREATE DATABASE airflow' || true; exit 0"]
+    restart: "no"
+
+  airflow-db-init:
+    build:
+      context: .
+      dockerfile: pipelines/airflow/Dockerfile
+    depends_on:
+      create_airflow_db:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    command: airflow db init
+    restart: "no"
+
+  airflow-create-admin:
+    build:
+      context: .
+      dockerfile: pipelines/airflow/Dockerfile
+    depends_on:
+      airflow-db-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+    # Delete admin if present, then create with password from .env (keeps API auth in sync)
+    command: ["sh", "-c", "set +e; airflow users delete -u admin 2>/dev/null; airflow users create -r Admin -u admin -e info@ldvconsultingltd.ng -f admin -l user -p \"$$AIRFLOW_PASSWORD\" 2>/dev/null; exit 0"]
+    restart: "no"
 
   airflow-webserver:
     build:
@@ -25,16 +65,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      create_airflow_db:
+        condition: service_completed_successfully
+      airflow-db-init:
+        condition: service_completed_successfully
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      # Same secret on all Airflow components so webserver can fetch task logs (avoids 403)
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-nmdpra-airflow-secret-key-change-in-prod}
+      # Allow REST API to accept Basic auth (admin:password from API container)
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
       _AIRFLOW_WWW_USER_USERNAME: admin
-      _AIRFLOW_WWW_USER_PASSWORD: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       NMDPRA_DB_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
     volumes:
       - ./pipelines/airflow/dags:/opt/airflow/dags
+      - ./core:/opt/airflow/core
       - ./data:/opt/airflow/data
       - ./parsers:/opt/airflow/parsers
       - ./scripts:/opt/airflow/scripts
@@ -52,93 +101,141 @@ services:
     build:
       context: .
       dockerfile: pipelines/airflow/Dockerfile
+    hostname: airflow-scheduler
     depends_on:
       postgres:
         condition: service_healthy
+      create_airflow_db:
+        condition: service_completed_successfully
+      airflow-db-init:
+        condition: service_completed_successfully
       airflow-webserver:
         condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      # Same as webserver so log server accepts webserver's request (fixes 403 on task logs)
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-nmdpra-airflow-secret-key-change-in-prod}
       NMDPRA_DB_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
     volumes:
       - ./pipelines/airflow/dags:/opt/airflow/dags
+      - ./core:/opt/airflow/core
       - ./data:/opt/airflow/data
       - ./parsers:/opt/airflow/parsers
       - ./scripts:/opt/airflow/scripts
     command: scheduler
 
-  # Runs once on stack startup: wait for Airflow, trigger DAG once, then exit. No schedule.
-  pipeline_bootstrap:
-    image: apache/airflow:2.7.3-python3.11
+  # Ensure the ingestion DAG is unpaused after metadata/db init (internal orchestration).
+  airflow-dag-unpause:
+    build:
+      context: .
+      dockerfile: pipelines/airflow/Dockerfile
     depends_on:
       airflow-webserver:
         condition: service_healthy
-      airflow-scheduler:
-        condition: service_started
     environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/airflow
       AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         set -e
-        echo "Waiting for Airflow REST..."
-        i=0
-        while [ $$i -lt 90 ]; do
-          if curl -sf -u "$${AIRFLOW_USERNAME}:$${AIRFLOW_PASSWORD}" "http://airflow-webserver:8080/api/v1/health" >/dev/null; then
-            echo "Airflow is healthy."
-            break
-          fi
-          i=$$((i+1))
-          sleep 2
-        done
-        if [ $$i -eq 90 ]; then
-          echo "Timeout waiting for Airflow."
-          exit 1
-        fi
-        echo "Triggering DAG run (startup)..."
-        curl -sf -X POST -u "$${AIRFLOW_USERNAME}:$${AIRFLOW_PASSWORD}" \
-          "http://airflow-webserver:8080/api/v1/dags/nmdpra_end_to_end_dag/dagRuns" \
+        curl -sf -X PATCH -u "$${AIRFLOW_USERNAME}:$${AIRFLOW_PASSWORD}" \
+          "http://airflow-webserver:8080/api/v1/dags/nmdpra_end_to_end_dag" \
           -H "Content-Type: application/json" \
-          -d '{"conf":{"triggered_by":"startup"}}' || true
-        echo "Startup trigger done."
+          -d '{"is_paused": false}' || true
+        echo "DAG pause flag cleared."
+    restart: "no"
+
+  # One-shot: trigger initial ingestion only when DB has no successful run or no downloaded files.
+  pipeline-bootstrap:
+    image: python:3.11-slim
+    depends_on:
+      api:
+        condition: service_healthy
+      airflow-webserver:
+        condition: service_healthy
+      airflow-scheduler:
+        condition: service_started
+      airflow-dag-unpause:
+        condition: service_completed_successfully
+    environment:
+      API_URL: http://api:8000
+      AIRFLOW_API_BASE: http://airflow-webserver:8080/api/v1
+      AIRFLOW_HEALTH_URL: http://airflow-webserver:8080/health
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+    volumes:
+      - ./scripts/bootstrap_pipeline.py:/bootstrap.py:ro
+    command: ["python", "/bootstrap.py"]
     restart: "no"
 
   api:
     build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+      context: ./apps/api
+      dockerfile: Dockerfile
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-nmdpra}:${POSTGRES_PASSWORD:-nmdpra_secret}@postgres:5432/${POSTGRES_DB:-nmdpra_data}
+      PGHOST: postgres
+      PGPORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-nmdpra}
+      POSTGRES_DB: ${POSTGRES_DB:-nmdpra_data}
       API_HOST: 0.0.0.0
       API_PORT: 8000
       AIRFLOW_API_BASE: http://airflow-webserver:8080/api/v1
       AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       ADMIN_RUN_TOKEN: ${ADMIN_RUN_TOKEN:-}
+      # Set to true and mount Docker socket + repo at /workspace to let "Start Airflow" in the UI run compose
+      ENABLE_AIRFLOW_DOCKER_START: ${ENABLE_AIRFLOW_DOCKER_START:-}
+      COMPOSE_PROJECT_DIR: /workspace
+      COMPOSE_FILE: docker-compose.yml
+      # Optional: e.g. "postgres api web airflow-webserver airflow-scheduler"
+      AIRFLOW_COMPOSE_SERVICES: "${AIRFLOW_COMPOSE_SERVICES:-postgres airflow-webserver airflow-scheduler}"
+      PYTHONPATH: /opt/nmdpra:/app
+      NMDPRA_DATA_DIR: /opt/nmdpra/data
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./apps/api:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      - ./core:/opt/nmdpra/core
+      - ./parsers:/opt/nmdpra/parsers
+      - ./scripts:/opt/nmdpra/scripts
+      - ./data:/opt/nmdpra/data
+      - .:/workspace:ro
+      # Uncomment so the API can run `docker compose` (Docker Desktop / Linux):
+      # - /var/run/docker.sock:/var/run/docker.sock
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 120s
 
   web:
     build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+      context: ./apps/web
+      dockerfile: Dockerfile
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+      # Server-side fetches (SSR) use Docker service name; browser uses localhost
+      API_URL: http://api:8000
+      BACKEND_API_URL: http://api:8000
       # Server-side only: used by /api/pipeline/* routes to call FastAPI with token
       ADMIN_RUN_TOKEN: ${ADMIN_RUN_TOKEN:-}
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
       - ./apps/web:/app
       - /app/node_modules

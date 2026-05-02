@@ -1,5 +1,5 @@
 """
-NMDPRA Data Product API - Business + Governance endpoints.
+NMDPRA Downstream Regulatory Intelligence API - Business + Governance endpoints.
 """
 from contextlib import asynccontextmanager
 from time import time
@@ -24,6 +24,10 @@ from app.routers import (
     governance_audit,
     governance_health,
     admin_pipeline,
+    pipeline_status,
+    data_layers,
+    seed_demo,
+    start_airflow,
 )
 from app.database import get_db
 from app.middleware import audit_middleware
@@ -36,8 +40,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="NMDPRA Data Product API",
-    description="Business and Governance APIs for NMDPRA data.",
+    title="NMDPRA Downstream Regulatory Intelligence API",
+    description="Business and governance APIs for NMDPRA downstream regulatory data.",
     version="1.0.0",
     openapi_url="/openapi.json",
     docs_url="/docs",
@@ -68,8 +72,12 @@ app.include_router(governance_lineage.router, prefix="/v1/governance", tags=["Go
 app.include_router(governance_audit.router, prefix="/v1/governance", tags=["Governance"])
 app.include_router(governance_health.router, prefix="/v1/governance", tags=["Governance"])
 app.include_router(admin_pipeline.router, prefix="/v1", tags=["Admin"])
+app.include_router(seed_demo.router, prefix="/v1/admin", tags=["Admin"])
+app.include_router(start_airflow.router, prefix="/v1/admin", tags=["Admin"])
+app.include_router(pipeline_status.router, prefix="/v1", tags=["Pipeline"])
+app.include_router(data_layers.router, prefix="/v1", tags=["Data layers"])
 
 
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 def health():
     return {"status": "ok"}

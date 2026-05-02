@@ -1,4 +1,4 @@
-# Building an Enterprise Data Product for a Petroleum Regulator: The NMDPRA Data Platform
+# Building an Enterprise Data Product for a Petroleum Regulator: NMDPRA Downstream Regulatory Intelligence
 
 *A case study in data product management, platform design, and governed delivery*
 
@@ -8,7 +8,7 @@
 
 Regulators in oil and gas sit on some of the most policy-sensitive data a country produces: fuel prices by city, refinery utilization, vessel clearances, stock levels, and days of supply. In Nigeria, the Nigerian Midstream and Downstream Petroleum Regulatory Authority (NMDPRA) publishes these metrics as PDFs on several public web pages—Oil & Gas fact sheets, vessel schedules, daily truckout reports, and stock and days-sufficiency reports. The information is authoritative and public, but it is not structured, queryable, or easy to reuse. Analysts and policy teams either manually open PDFs every month or build one-off scrapers that break when layouts change. There is no single place to see what data exists, when it was last updated, or whether the numbers are complete and consistent. The result is duplicated effort, delayed decisions, and a higher risk of using outdated or misinterpreted data.
 
-The problem is not lack of data; it is the gap between “published” and “usable as a product.” Turning PDF-centric publication into a reliable, queryable data product requires more than parsing: it requires a clear ingestion strategy, defined layers of storage, explicit quality checks, traceable lineage, and interfaces that support both human users and downstream systems. This case study describes how the NMDPRA Data Product Platform was designed and delivered to close that gap—and what that implies for enterprise data product management and end-to-end delivery.
+The problem is not lack of data; it is the gap between “published” and “usable as a product.” Turning PDF-centric publication into a reliable, queryable data product requires more than parsing: it requires a clear ingestion strategy, defined layers of storage, explicit quality checks, traceable lineage, and interfaces that support both human users and downstream systems. This case study describes how the NMDPRA Downstream Regulatory Intelligence Platform was designed and delivered to close that gap—and what that implies for enterprise data product management and end-to-end delivery.
 
 ---
 

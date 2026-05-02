@@ -1,0 +1,5 @@
+import { redirect } from 'next/navigation';
+
+export default function ConsultPage() {
+  redirect('https://www.ldvconsultingltd.ng/contact-us');
+}

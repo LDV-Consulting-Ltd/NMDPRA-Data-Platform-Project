@@ -2,15 +2,14 @@
  * Server-only: get a single DAG run (for progress / current task).
  */
 import { NextRequest, NextResponse } from 'next/server';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const ADMIN_TOKEN = process.env.ADMIN_RUN_TOKEN;
+import { backendApiBase } from '@/lib/backend-url';
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ dagRunId: string }> }
 ) {
   const { dagRunId } = await params;
+  const ADMIN_TOKEN = process.env.ADMIN_RUN_TOKEN;
   if (!ADMIN_TOKEN) {
     return NextResponse.json(
       { error: 'Not configured (ADMIN_RUN_TOKEN missing)' },
@@ -20,7 +19,7 @@ export async function GET(
 
   try {
     const res = await fetch(
-      `${API_BASE}/v1/admin/pipeline/runs/${encodeURIComponent(dagRunId)}`,
+      `${backendApiBase()}/v1/admin/pipeline/runs/${encodeURIComponent(dagRunId)}`,
       {
         headers: { 'X-Admin-Token': ADMIN_TOKEN },
       }

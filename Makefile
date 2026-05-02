@@ -2,7 +2,7 @@
 
 help:
 	@echo "NMDPRA Data Platform - Common commands"
-	@echo "  make up          - Start all services (postgres, airflow, api, web)"
+	@echo "  make up          - Build and start all services (DB, migrations, orchestration, API, web, bootstrap)"
 	@echo "  make down        - Stop all services"
 	@echo "  make build       - Build Docker images"
 	@echo "  make logs        - Tail docker-compose logs"
@@ -18,7 +18,7 @@ help:
 	@echo "  make lint        - Run ruff + mypy"
 
 up:
-	docker compose up -d
+	docker compose up -d --build
 
 down:
 	docker compose down

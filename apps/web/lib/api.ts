@@ -1,4 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Server-side (e.g. in Docker) must use API service URL; browser uses public URL
+const API_BASE =
+  typeof window === 'undefined'
+    ? (process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
+    : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
 
 export async function fetchApi<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(path, API_BASE);

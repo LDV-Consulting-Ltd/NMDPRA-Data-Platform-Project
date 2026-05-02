@@ -18,7 +18,7 @@ DOCS.mkdir(parents=True, exist_ok=True)
 
 
 def write_data_architecture_mmd() -> str:
-    content = """%% Data Architecture - NMDPRA Data Product
+    content = """%% Data Architecture - NMDPRA Downstream Regulatory Intelligence
 flowchart LR
     subgraph Sources["NMDPRA Public"]
         A1[OilGasData]

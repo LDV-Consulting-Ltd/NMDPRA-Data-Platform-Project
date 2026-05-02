@@ -1,4 +1,4 @@
-# NMDPRA Data Platform — Structured Product Analysis
+# NMDPRA Downstream Regulatory Intelligence — Structured Product Analysis
 
 Analysis for: (1) Company website product article, (2) Leadership portfolio case study.  
 Evidence-based; inferences clearly labeled.
@@ -9,7 +9,7 @@ Evidence-based; inferences clearly labeled.
 
 | # | Item | Value |
 |---|------|--------|
-| 1 | **Product name** | NMDPRA Data Product Platform (V1) |
+| 1 | **Product name** | NMDPRA Downstream Regulatory Intelligence Platform (V1) |
 | 2 | **One-sentence description** | Production-grade, API-first data platform that ingests, cleans, and serves Nigerian Midstream and Downstream Petroleum Regulatory Authority (NMDPRA) public data with full governance (DQ, metadata, lineage, audit) and a Next.js dashboard. |
 | 3 | **Domain / industry** | Oil & gas / energy regulation (Nigeria); public sector data. |
 | 4 | **Primary problem addressed** | NMDPRA publishes key metrics (fuel prices, refinery status, vessel clearances, stock sufficiency, truckout) as PDFs on multiple web pages; the product turns these into queryable, API- and dashboard-accessible datasets with known quality and lineage. |
@@ -165,7 +165,7 @@ The product enables the organization to:
 
 ### 1. Buyer-facing product summary (300–500 words)
 
-**NMDPRA Data Product Platform** turns the Nigerian Midstream and Downstream Petroleum Regulatory Authority’s public PDF reports into a single, reliable data product that your team can query, monitor, and trust.
+**NMDPRA Downstream Regulatory Intelligence Platform** turns the Nigerian Midstream and Downstream Petroleum Regulatory Authority’s public PDF reports into a single, reliable data product that your team can query, monitor, and trust.
 
 Regulators and analysts today waste time opening multiple web pages, downloading PDFs, and re-extracting the same numbers month after month. The platform automates this end to end: it discovers new reports, downloads only what’s new or changed, and parses them into structured datasets. You get **fuel prices by city**, **refinery utilization**, **vessel clearances**, **stock and days sufficiency**, and **historical truckout and stock data** through a single API and a clear dashboard—with clear labels for what’s actively updated and what’s archived.
 
@@ -192,9 +192,9 @@ Operators can run the pipeline on demand from the dashboard or on a schedule, an
 
 ### 3. Five strong product article titles
 
-1. From PDFs to a Single Source of Truth: The NMDPRA Data Product Platform  
+1. From PDFs to a Single Source of Truth: The NMDPRA Downstream Regulatory Intelligence Platform  
 2. How We Turn Regulatory PDFs Into Trusted, Queryable Data  
-3. Governance First: DQ, Lineage, and Audit in the NMDPRA Data Platform  
+3. Governance First: DQ, Lineage, and Audit in the NMDPRA Downstream Regulatory Intelligence  
 4. One Pipeline, Four Sources: Designing for Idempotency and Clarity  
 5. Why We Built an API-First Data Product for Nigerian Downstream Regulation  
 
@@ -202,7 +202,7 @@ Operators can run the pipeline on demand from the dashboard or on a schedule, an
 
 ### 4. Elevator pitch
 
-**NMDPRA Data Product Platform** turns the regulator’s public PDFs into one API-first, governed data product—with automated ingestion, data quality, lineage, and a dashboard—so your team can query fuel prices, refinery status, vessel clearances, and stock sufficiency without ever opening a PDF again.
+**NMDPRA Downstream Regulatory Intelligence Platform** turns the regulator’s public PDFs into one API-first, governed data product—with automated ingestion, data quality, lineage, and a dashboard—so your team can query fuel prices, refinery status, vessel clearances, and stock sufficiency without ever opening a PDF again.
 
 ---
 
@@ -254,7 +254,7 @@ This project delivers an **enterprise-grade data product** for the Nigerian Mids
 
 1. Building an Enterprise Data Product for a Petroleum Regulator: From PDFs to Governed APIs  
 2. How We Embedded Data Quality, Lineage, and Audit in One Pipeline  
-3. Designing for Trust: Governance and Transparency in the NMDPRA Data Platform  
+3. Designing for Trust: Governance and Transparency in the NMDPRA Downstream Regulatory Intelligence  
 4. Tradeoffs in a Production Data Platform: Idempotency, Layers, and Operational Visibility  
 5. Delivering Both Analytics and Operations: API-First Design for Regulators  
 
@@ -264,7 +264,7 @@ This project delivers an **enterprise-grade data product** for the Nigerian Mids
 
 | Claim or conclusion | Supporting file(s) | Confidence | Notes / assumptions |
 |---------------------|--------------------|------------|----------------------|
-| Product name: NMDPRA Data Product Platform (V1) | README.md | High | Explicit. |
+| Product name: NMDPRA Downstream Regulatory Intelligence Platform (V1) | README.md | High | Explicit. |
 | Four data sources (OilGasData, VesselSchedule, DailyTruckout, StockReport) | README.md, core/discover.py, 001_initial_schemas.py | High | Enum and discover functions. |
 | Pipeline: discover → download → parse → DQ → silver → gold → publish → finalize | nmdpra_end_to_end_dag.py, core/run_pipeline.py | High | DAG and run_pipeline. |
 | Idempotent download via content hash | core/download.py, run_pipeline.run_download (file_registry update) | High | Hash computed and stored; skip logic in run_download is implicit (always downloads; idempotency is “don’t re-parse same file” via hash). |
@@ -281,7 +281,7 @@ This project delivers an **enterprise-grade data product** for the Nigerian Mids
 | Mermaid diagrams generated from code | scripts/generate_diagrams.py | High | data_architecture, gold_dimensional_model, lineage. |
 | Parsers use pdfplumber (and utils) | parsers/oilgasdata_parser.py, README | High | README mentions camelot/tabula, tesseract; oilgasdata uses pdfplumber. |
 | Discover upserts file_registry; new file_id per item in loop | run_pipeline.run_discover | Medium | ON CONFLICT (file_id) never triggers with new UUIDs; infer: dedupe by URL not implemented. |
-| Target: internal NMDPRA use | README (License) | Medium | “Internal / NMDPRA Data Product use.” |
+| Target: internal NMDPRA use | README (License) | Medium | “Internal / NMDPRA Downstream Regulatory Intelligence use.” |
 | Production-ready maturity | README, Docker Compose, migrations, single DAG, governance | High | Judgment from structure and docs. |
 
 ---

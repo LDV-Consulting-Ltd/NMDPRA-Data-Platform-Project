@@ -1,4 +1,4 @@
-# NMDPRA Data Product Platform (V1)
+# NMDPRA Downstream Regulatory Intelligence Platform (V1)
 
 Production-grade, API-first data platform for Nigerian Midstream and Downstream Petroleum Regulatory Authority (NMDPRA) public data, with full governance (DQ, metadata, lineage, audit) and a Next.js dashboard.
 
@@ -14,11 +14,11 @@ Production-grade, API-first data platform for Nigerian Midstream and Downstream 
 ## Tech Stack
 
 - **Python 3.11+** – Pipelines, parsers, API
-- **Apache Airflow** (Docker) – Orchestration
+- **Orchestration engine** (Apache Airflow in Docker) – runs the automated ingestion workflow internally; operators use **Platform Operations**, not the engine UI, for day-to-day use
 - **PostgreSQL 15+** – Storage (bronze / silver / gold / meta)
 - **FastAPI** – Business + Governance APIs
 - **Next.js** (App Router) – Dashboard
-- **Docker Compose** – Local dev
+- **Docker Compose** – Local and single-command startup
 - **Parsing**: pdfplumber, camelot/tabula, tesseract (OCR fallback)
 - **Diagrams**: Mermaid + CLI export (PNG/SVG)
 
@@ -27,108 +27,100 @@ Production-grade, API-first data platform for Nigerian Midstream and Downstream 
 ### Prerequisites
 
 - Docker & Docker Compose
-- Node 18+ (for local web dev)
-- Python 3.11+ (for local API/scripts)
+- Node 18+ (only if you run the web app outside Docker)
+- Python 3.11+ (only if you run the API or scripts outside Docker)
 
-### 1. Clone and configure
+### 1. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env if needed (DB credentials, etc.)
 ```
 
-### 2. Start services
+Edit `.env` as needed (database credentials, `ADMIN_RUN_TOKEN` for authorized pipeline runs from the UI, `AIRFLOW_PASSWORD`, etc.). Never commit secrets.
+
+### 2. Start the stack
 
 ```bash
 make up
-# Or: docker compose up -d
 ```
 
-- **API**: http://localhost:8000 (docs: http://localhost:8000/docs)
-- **Dashboard**: http://localhost:3000
-- **Airflow**: http://localhost:8080 (admin / admin)
+This builds images (when needed), starts PostgreSQL, applies **Alembic migrations automatically** via the API entrypoint, initializes the orchestration metadata store, starts the orchestration webserver and worker, starts FastAPI and Next.js, unpauses the ingestion workflow, and runs a **one-time bootstrap** ingestion when there is no successful run yet or no downloaded files.
 
-### 3. Run migrations
+Published ports (see `docker-compose.yml`):
 
-```bash
-make db-upgrade
-```
+- **Dashboard**: http://localhost:3001 (mapped host port; container listens on 3000)
+- **API**: http://localhost:8001 (OpenAPI: `/docs`)
+- **Internal orchestration UI** (operators / troubleshooting only): http://localhost:8080
 
-### 4. Pipeline runs
+### 3. Use the product
 
-- **On startup**: When you run `make up`, the `pipeline_bootstrap` service runs once after Airflow is healthy and triggers the DAG (conf: `triggered_by: startup`). Then it exits. No fixed schedule.
-- **Run when you want**: Use the **Run now** button in the dashboard (Overview or Governance → Coverage). This calls the FastAPI admin endpoint, which triggers the DAG via the Airflow REST API. Set `ADMIN_RUN_TOKEN` in `.env` (and in the `web` service env for the server route); the token is never sent to the browser.
-- **Optional**: In Airflow UI (http://localhost:8080), open DAG `nmdpra_end_to_end_dag` → Trigger DAG. Or backfill: `make backfill SOURCE=oilgasdata FROM=2023-01 TO=2026-12`
+- Open the dashboard URL above. If data is still loading, a short **data readiness** banner explains that ingestion is in progress.
+- Authorized operators: open **Operations** in the header or go to **Platform Operations** at `/admin/pipeline` to **Run pipeline**, view status, optional demo seeding, and (optionally) the internal orchestration console link.
 
-### 5. Generate diagrams
+No manual migration step is required for normal startup. `make db-upgrade` remains available for maintenance.
+
+### 4. Diagrams (optional)
 
 ```bash
 make diagrams
-# Writes docs/diagrams/*.mmd and optionally PNG/SVG
 ```
+
+Writes `docs/diagrams/*.mmd` and optionally PNG/SVG.
+
+## Pipeline behaviour
+
+The automated ingestion workflow runs **only when triggered**: first-time bootstrap (empty or unsuccessful data), or an authorized **Run pipeline** action. There is **no fixed hourly/daily schedule** in the DAG definition (`schedule_interval=None`, `max_active_runs=1`, `catchup=False`).
+
+Steps: discover → download → parse → DQ → silver → gold → publish metadata/lineage → diagrams → finalize.
 
 ## Project Structure
 
 ```
 ├── apps/
 │   ├── api/                 # FastAPI (business + governance)
+│   │   ├── docker/entrypoint.api.sh   # wait Postgres → alembic upgrade → uvicorn
 │   │   ├── main.py
 │   │   ├── Dockerfile
 │   │   ├── alembic/
-│   │   ├── app/ (routers, models, services)
+│   │   └── app/ (routers, models, services)
 │   └── web/                 # Next.js dashboard
 │       ├── app/ (pages, components)
 │       └── Dockerfile
-├── pipelines/
-│   └── airflow/
-│       ├── dags/
-│       │   └── nmdpra_end_to_end_dag.py
-│       └── Dockerfile
-├── parsers/                 # Modular PDF parsers
-│   ├── oilgasdata_parser.py
-│   ├── vesselschedule_parser.py
-│   ├── dailytruckout_parser.py
-│   └── stockreport_parser.py
+├── pipelines/airflow/
+│   ├── dags/nmdpra_end_to_end_dag.py
+│   └── Dockerfile
+├── core/                    # Pipeline runner + discover (mounted into API & workers)
+├── parsers/
 ├── scripts/
+│   ├── bootstrap_pipeline.py   # Startup bootstrap (compose one-shot)
 │   ├── generate_diagrams.py
 │   └── backfill.py
-├── data/                    # Downloaded PDFs (mounted)
-├── docs/
-│   └── diagrams/            # Mermaid + exported artifacts
-├── tests/
+├── data/
 ├── docker-compose.yml
 ├── Makefile
 └── .env.example
 ```
 
-## Pipeline (One DAG)
-
-**DAG**: `nmdpra_end_to_end_dag`
-
-1. **Discover** – Scrape NMDPRA pages, extract PDF links → `bronze.file_registry`
-2. **Download** – Download new/changed PDFs (hash-based skip)
-3. **Parse** – Per-source parsers → bronze tables + rejects
-4. **DQ (Bronze)** – Run rules, store `bronze.dq_result`, route bad rows to `bronze.rejects`
-5. **Silver** – Normalized model from bronze (dims + facts)
-6. **Gold** – Dimensional model (star schemas) from silver
-7. **Publish** – Metadata, lineage, diagram generation
-8. **Finalize** – Run summary, `ingest_run` / `ingest_run_file`
-
-Supports: **scheduled** (e.g. daily) and **manual** trigger / backfill. Idempotent via URL + content hash.
-
 ## APIs
 
 - **Business**: `/v1/reports`, `/v1/highlights`, `/v1/refineries/*`, `/v1/prices/*`, `/v1/vessels/*`, `/v1/archive/*`, etc.
 - **Governance**: `/v1/governance/dq/*`, `/v1/governance/metadata/*`, `/v1/governance/lineage/*`, `/v1/governance/audit/*`, `/v1/governance/health/ingestion`
+- **Dashboard pipeline status (sanitized)**: `/v1/pipeline/status`
+- **Admin (token: `X-Admin-Token`)**: `/v1/admin/pipeline/run`, `/status`, `/runs`, `/health`, `/backfill`
 
-All with pagination, `last_updated`, coverage, and `data_status` (active/archived/paused) where appropriate.
+The Next.js app proxies privileged routes server-side; **`ADMIN_RUN_TOKEN` is never exposed to the browser**.
 
-## Dashboard
+## Makefile
 
-- **Business**: Overview, Prices, Sufficiency, Refineries, Gas, Vessels, Archive (labeled “Archived”).
-- **Governance**: Coverage, DQ, Lineage (Mermaid), Catalog (data dictionary).
-
-UI calls FastAPI only; no direct DB. Coverage + last updated + status banner on dataset pages.
+| Command | Purpose |
+|--------|---------|
+| `make up` | Build and start all services |
+| `make down` | Stop stack |
+| `make logs` | Follow logs |
+| `make db-upgrade` | Apply migrations manually (optional; automatic on API start in Docker) |
+| `make diagrams` | Generate diagrams |
+| `make backfill` | CLI backfill helper |
+| `make test` | Run pytest |
 
 ## Data Model
 
@@ -138,4 +130,4 @@ UI calls FastAPI only; no direct DB. Coverage + last updated + status banner on 
 
 ## License
 
-Internal / NMDPRA Data Product use.
+Internal / NMDPRA Downstream Regulatory Intelligence use.

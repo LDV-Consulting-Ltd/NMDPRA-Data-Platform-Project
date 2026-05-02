@@ -4,6 +4,7 @@ Uses DB URL from env (NMDPRA_DB_URL or DATABASE_URL). Idempotent: skip unchanged
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -70,10 +71,14 @@ def get_engine():
 
 
 def run_discover(engine) -> int:
-    """Upsert bronze.file_registry from discovered links."""
-    conn = engine.connect()
-    try:
-        items = discover_all()
+    """Upsert bronze.file_registry from discovered links. Fails if 0 PDFs found so 'discover green' means data to process."""
+    items = discover_all()
+    if not items:
+        raise RuntimeError(
+            "Discover found 0 PDFs from https://www.nmdpra.gov.ng. "
+            "Check network from the runner (e.g. Docker outbound), or use 'Load demo data' to seed the dashboard."
+        )
+    with engine.begin() as conn:
         count = 0
         for it in items:
             file_id = str(uuid.uuid4())
@@ -99,16 +104,12 @@ def run_discover(engine) -> int:
                 "discovered_at": datetime.utcnow(),
             })
             count += 1
-        conn.commit()
         return count
-    finally:
-        conn.close()
 
 
 def run_download(engine) -> int:
     """Download PDFs that are not yet downloaded or hash changed; update file_registry."""
-    conn = engine.connect()
-    try:
+    with engine.begin() as conn:
         r = conn.execute(text("SELECT file_id, source_name, pdf_url FROM bronze.file_registry WHERE status IN ('active', 'archived')"))
         rows = r.fetchall()
         count = 0
@@ -121,17 +122,13 @@ def run_download(engine) -> int:
                 UPDATE bronze.file_registry SET file_path = :path, content_hash = :content_hash, downloaded_at = :downloaded_at WHERE file_id = :file_id
             """), {"path": str(path), "content_hash": content_hash, "downloaded_at": datetime.utcnow(), "file_id": file_id})
             count += 1
-        conn.commit()
         return count
-    finally:
-        conn.close()
 
 
 def run_parse(engine) -> dict:
     """Parse each downloaded file by source_name; write to bronze tables. Returns row_counts per table."""
-    conn = engine.connect()
     row_counts = {}
-    try:
+    with engine.begin() as conn:
         r = conn.execute(text("SELECT file_id, source_name, file_path, report_period, report_date FROM bronze.file_registry WHERE file_path IS NOT NULL AND downloaded_at IS NOT NULL"))
         for file_id, source_name, file_path, report_period, report_date in r.fetchall():
             path = Path(file_path)
@@ -191,45 +188,60 @@ def run_parse(engine) -> dict:
                                 VALUES (:id, :report_date, :product, :opening_stock_litres, :receipts_litres, :evacuation_litres, :book_closing_litres, :actual_closing_litres, :dead_stock_litres, :closing_operational_litres, :nat_avg_daily_consumption_litres, :days_sufficiency, :prev_days_sufficiency, :source_file_id, :source_page)
                             """), {**row, "source_file_id": file_id})
                     row_counts[table] = row_counts.get(table, 0) + len(out.get(table, []))
-        conn.commit()
-    finally:
-        conn.close()
     return row_counts
+
+
+def _ensure_run_id_uuid(engine, run_id: str) -> str:
+    """Return a UUID string for run_id. If run_id is not a valid UUID, derive one and ensure bronze.ingest_run has a row."""
+    try:
+        uuid.UUID(run_id)
+        return run_id
+    except (ValueError, TypeError):
+        pass
+    # e.g. Airflow dag_run.run_id "manual__2026-03-15T04:13:32..." -> deterministic UUID
+    pipeline_run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, run_id or "manual"))
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO bronze.ingest_run (run_id, dag_id, triggered_by, started_at, status)
+            VALUES (:run_id, 'nmdpra_end_to_end_dag', 'schedule', :started_at, 'partial')
+            ON CONFLICT (run_id) DO NOTHING
+        """), {"run_id": pipeline_run_id, "started_at": datetime.utcnow()})
+    return pipeline_run_id
 
 
 def run_dq(engine, run_id: str) -> list:
     """Run DQ rules on bronze; store results. Returns list of failed result dicts."""
-    conn = engine.connect()
+    run_id = _ensure_run_id_uuid(engine, run_id)
     results = []
-    try:
+    with engine.begin() as conn:
         # Seed DQ rules if none exist
         r = conn.execute(text("SELECT COUNT(*) FROM bronze.dq_rule")).scalar()
         if r == 0:
             for rule in default_dq_rules():
+                params = {k: v for k, v in rule.items() if k in ("rule_id", "rule_name", "layer", "table_name", "rule_type", "rule_definition", "severity", "is_active")}
+                if isinstance(params.get("rule_definition"), (dict, list)):
+                    params["rule_definition"] = json.dumps(params["rule_definition"])
                 conn.execute(text("""
                     INSERT INTO bronze.dq_rule (rule_id, rule_name, layer, table_name, rule_type, rule_definition, severity, is_active)
                     VALUES (:rule_id, :rule_name, :layer, :table_name, :rule_type, :rule_definition, :severity, :is_active)
-                """), {k: v for k, v in rule.items() if k in ("rule_id", "rule_name", "layer", "table_name", "rule_type", "rule_definition", "severity", "is_active")})
-            conn.commit()
+                """), params)
         rules = list(conn.execute(text("SELECT rule_id, rule_name, layer, table_name FROM bronze.dq_rule WHERE is_active = true")).fetchall())
         for rule_row in rules:
             rule_id, rule_name, layer, table_name = rule_row
             # Simplified: just record rule exists; full run would query bronze rows and evaluate
             rec = dq_result_record(run_id, layer, table_name, str(rule_id), True, 0, 0, [])
+            if isinstance(rec.get("sample_failures"), (dict, list)):
+                rec = {**rec, "sample_failures": json.dumps(rec["sample_failures"])}
             conn.execute(text("""
                 INSERT INTO bronze.dq_result (result_id, run_id, file_id, layer, table_name, rule_id, passed, failed_count, total_count, sample_failures)
                 VALUES (:result_id, :run_id, :file_id, :layer, :table_name, :rule_id, :passed, :failed_count, :total_count, :sample_failures)
             """), rec)
-        conn.commit()
-    finally:
-        conn.close()
     return results
 
 
 def run_silver_gold(engine) -> None:
     """Build silver dims/facts from bronze, then gold from silver. Truncate and reload for simplicity."""
-    conn = engine.connect()
-    try:
+    with engine.begin() as conn:
         # Collect bronze data
         dates = set()
         products = set()
@@ -255,7 +267,12 @@ def run_silver_gold(engine) -> None:
         for row in r:
             if row[0]:
                 locations.append((row[0], "state"))
-        r = conn.execute(text("SELECT product FROM bronze.fuel_prices_city UNION SELECT product FROM bronze.consumption_benchmark")).fetchall()
+        r = conn.execute(text("""
+            SELECT product FROM bronze.consumption_benchmark
+            UNION SELECT product FROM bronze.stock_days_sufficiency_summary
+            UNION SELECT product FROM bronze.truckout_by_depot_daily
+            UNION SELECT product FROM bronze.truckout_by_state_daily
+        """)).fetchall()
         for row in r:
             if row[0]:
                 products.add(row[0])
@@ -325,15 +342,11 @@ def run_silver_gold(engine) -> None:
                 cols = ", ".join(row.keys())
                 placeholders = ", ".join(":" + k for k in row.keys())
                 conn.execute(text(f"INSERT INTO gold.{name} ({cols}) VALUES ({placeholders})"), row)
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def run_publish_metadata_lineage(engine) -> None:
     """Populate meta.data_dictionary and meta.lineage_node/edge."""
-    conn = engine.connect()
-    try:
+    with engine.begin() as conn:
         conn.execute(text("DELETE FROM meta.lineage_edge"))
         conn.execute(text("DELETE FROM meta.lineage_node"))
         conn.execute(text("DELETE FROM meta.data_dictionary"))
@@ -348,9 +361,6 @@ def run_publish_metadata_lineage(engine) -> None:
         for layer, obj, typ in nodes:
             nid = str(uuid.uuid4())
             conn.execute(text("INSERT INTO meta.lineage_node (node_id, layer, object_name, object_type) VALUES (:id, :layer, :name, :type)"), {"id": nid, "layer": layer, "name": obj, "type": typ})
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def run_full_pipeline(triggered_by: str = "manual") -> dict:
@@ -358,15 +368,11 @@ def run_full_pipeline(triggered_by: str = "manual") -> dict:
     run_id = str(uuid.uuid4())
     engine = get_engine()
     started_at = datetime.utcnow()
-    conn = engine.connect()
-    try:
+    with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO bronze.ingest_run (run_id, dag_id, triggered_by, started_at, status)
             VALUES (:run_id, 'nmdpra_end_to_end_dag', :triggered_by, :started_at, 'success')
         """), {"run_id": run_id, "triggered_by": triggered_by, "started_at": started_at})
-        conn.commit()
-    finally:
-        conn.close()
 
     try:
         run_discover(engine)
@@ -376,11 +382,11 @@ def run_full_pipeline(triggered_by: str = "manual") -> dict:
         run_silver_gold(engine)
         run_publish_metadata_lineage(engine)
         finished_at = datetime.utcnow()
-        engine.connect().execute(text("UPDATE bronze.ingest_run SET finished_at = :t, status = 'success' WHERE run_id = :run_id"), {"t": finished_at, "run_id": run_id})
-        engine.connect().commit()
+        with engine.begin() as c:
+            c.execute(text("UPDATE bronze.ingest_run SET finished_at = :t, status = 'success' WHERE run_id = :run_id"), {"t": finished_at, "run_id": run_id})
     except Exception as e:
-        engine.connect().execute(text("UPDATE bronze.ingest_run SET finished_at = :t, status = 'fail', notes = :notes WHERE run_id = :run_id"), {"t": datetime.utcnow(), "notes": str(e), "run_id": run_id})
-        engine.connect().commit()
+        with engine.begin() as c:
+            c.execute(text("UPDATE bronze.ingest_run SET finished_at = :t, status = 'fail', notes = :notes WHERE run_id = :run_id"), {"t": datetime.utcnow(), "notes": str(e), "run_id": run_id})
         return {"run_id": run_id, "status": "fail", "error": str(e)}
 
     return {"run_id": run_id, "status": "success", "row_counts": row_counts}
