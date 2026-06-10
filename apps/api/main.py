@@ -28,7 +28,9 @@ from app.routers import (
     data_layers,
     seed_demo,
     start_airflow,
+    product_manifest,
 )
+from app.tanna_connector import router as tanna_connector_router
 from app.database import get_db
 from app.middleware import audit_middleware
 
@@ -76,6 +78,8 @@ app.include_router(seed_demo.router, prefix="/v1/admin", tags=["Admin"])
 app.include_router(start_airflow.router, prefix="/v1/admin", tags=["Admin"])
 app.include_router(pipeline_status.router, prefix="/v1", tags=["Pipeline"])
 app.include_router(data_layers.router, prefix="/v1", tags=["Data layers"])
+app.include_router(product_manifest.router, prefix="/v1")
+app.include_router(tanna_connector_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"])
