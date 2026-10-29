@@ -77,7 +77,20 @@ Root `vercel.json` deploys **two services** in one project:
 vercel dev    # runs both services; injects bindings
 ```
 
-**Not on Vercel:** Postgres, Airflow, MinIO, and ingestion workers remain external (Docker Compose / managed DB). Configure `DATABASE_URL` (and related secrets) on the `api` service.
+**Database (Supabase):** point the `api` service at your Supabase Postgres. Set one of:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | Full Supabase connection URI (recommended) |
+| `SUPABASE_DB_URL` | Same as above (alias) |
+| `SUPABASE_DB_HOST` + `SUPABASE_DB_PASSWORD` | Build URI from parts if no full URL is set |
+| `SUPABASE_DB_USER` / `SUPABASE_DB_NAME` / `SUPABASE_DB_PORT` | Defaults: `postgres` / `postgres` / `5432` |
+
+The API normalizes `postgres://` → `postgresql+psycopg2://` and adds `sslmode=require` for `*.supabase.co`. Optional: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (not required for current SQLAlchemy access).
+
+**Also set on `api` (as needed):** `ADMIN_RUN_TOKEN`, `TANNA_CONNECTOR_TOKEN`, Airflow vars only if you still use orchestration from this deploy.
+
+**Not on Vercel:** Airflow, MinIO, and ingestion workers stay external (Docker Compose / separate workers).
 
 ### 4. Diagrams (optional)
 
