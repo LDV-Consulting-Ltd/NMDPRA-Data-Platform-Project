@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const API_BASE = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { backendApiBase } from '@/lib/backend-url';
 
 type Params = { params: Promise<{ schema: string; table: string }> };
 
@@ -11,7 +10,9 @@ export async function GET(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: 'Invalid schema' }, { status: 400 });
   }
   try {
-    const res = await fetch(`${API_BASE}/v1/data-layers/tables/${schema}/${table}/sample?limit=${limit}`);
+    const res = await fetch(
+      `${backendApiBase()}/v1/data-layers/tables/${schema}/${table}/sample?limit=${limit}`
+    );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return NextResponse.json(data, { status: res.status });
     return NextResponse.json(data);

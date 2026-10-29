@@ -1,11 +1,34 @@
-// Server-side (e.g. in Docker) must use API service URL; browser uses public URL
-const API_BASE =
-  typeof window === 'undefined'
-    ? (process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
-    : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+import { backendApiBase } from '@/lib/backend-url';
+
+/**
+ * Resolve API base for fetchApi.
+ * - Server: prefer binding / Docker internal URL (API_URL).
+ * - Browser: same-origin (empty base) when NEXT_PUBLIC_API_URL is unset so
+ *   public rewrites (/v1/*, /health) hit the FastAPI service on this domain.
+ */
+function apiBase(): string {
+  if (typeof window === 'undefined') {
+    return backendApiBase();
+  }
+  const publicUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (publicUrl && publicUrl.trim()) {
+    return publicUrl.replace(/\/$/, '');
+  }
+  return '';
+}
 
 export async function fetchApi<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(path, API_BASE);
+  const base = apiBase();
+  let url: URL;
+  if (base) {
+    url = new URL(path, base.endsWith('/') ? base : `${base}/`);
+  } else if (typeof window !== 'undefined') {
+    url = new URL(path, window.location.origin);
+  } else {
+    // Server without binding / env: absolute path on same host is not available;
+    // fall back to local FastAPI for non-Vercel runs.
+    url = new URL(path, 'http://localhost:8000');
+  }
   if (params) {
     Object.entries(params).forEach(([k, v]) => v && url.searchParams.set(k, v));
   }

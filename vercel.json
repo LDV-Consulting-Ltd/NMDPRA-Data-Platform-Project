@@ -1,0 +1,56 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "api": {
+      "root": "apps/api",
+      "framework": "fastapi",
+      "entrypoint": "main:app"
+    },
+    "web": {
+      "root": "apps/web",
+      "framework": "nextjs",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "api",
+          "format": "url",
+          "env": "API_URL"
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/v1/tanna/(.*)",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/v1/(.*)",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/health",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/openapi.json",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/docs",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/docs/(.*)",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/redoc",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "web" }
+    }
+  ]
+}

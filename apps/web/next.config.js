@@ -43,8 +43,12 @@ const nextConfig = {
     ];
   },
   async rewrites() {
+    // Local/Docker only: proxy helper. On Vercel Services, public rewrites in
+    // root vercel.json send /v1/* (and related paths) to the FastAPI service;
+    // server routes use the API_URL binding instead of this rewrite.
+    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     return [
-      { source: '/api/proxy/:path*', destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/:path*` },
+      { source: '/api/proxy/:path*', destination: `${apiOrigin}/:path*` },
     ];
   },
 };

@@ -33,7 +33,8 @@ type DbRun = {
 };
 
 const AF_UI = typeof window !== 'undefined' ? 'http://localhost:8080' : '';
-const PUB_API = process.env.NEXT_PUBLIC_API_URL || '';
+/** Same-origin when unset so public /v1 rewrites reach FastAPI on Vercel. */
+const PUB_API = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
 
 export function AdminPipelinePanel() {
   const [health, setHealth] = useState<Health | null>(null);

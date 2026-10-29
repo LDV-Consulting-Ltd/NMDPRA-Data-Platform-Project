@@ -59,6 +59,26 @@ Published ports (see `docker-compose.yml`):
 
 No manual migration step is required for normal startup. `make db-upgrade` remains available for maintenance.
 
+### Vercel Services (multi-service project)
+
+Root `vercel.json` deploys **two services** in one project:
+
+| Service | Root | Role |
+|---------|------|------|
+| `web` | `apps/web` | Next.js dashboard (public catch-all) |
+| `api` | `apps/api` | FastAPI (public on selected paths; also bound internally) |
+
+**Public paths → `api`:** `/v1/*`, `/api/v1/tanna/*`, `/health`, `/openapi.json`, `/docs`, `/redoc`.  
+**Everything else → `web`:** including Next.js BFF routes under `/api/pipeline/*`, `/api/seed-demo`, `/api/data-layers/*` (do **not** rewrite all of `/api/*` to FastAPI).
+
+**Binding:** `web` → `api` injects `API_URL` at runtime for server-side fetches. Do not set `API_URL` yourself in Vercel when using bindings. Browser calls use same-origin `/v1/...` when `NEXT_PUBLIC_API_URL` is unset.
+
+```bash
+vercel dev    # runs both services; injects bindings
+```
+
+**Not on Vercel:** Postgres, Airflow, MinIO, and ingestion workers remain external (Docker Compose / managed DB). Configure `DATABASE_URL` (and related secrets) on the `api` service.
+
 ### 4. Diagrams (optional)
 
 ```bash
