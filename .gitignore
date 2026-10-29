@@ -7,6 +7,8 @@ env/
 .env
 .env.*
 !.env.example
+.secrets/
+apps/api/_tmp_*.py
 
 # Node / Next.js
 node_modules/
@@ -47,3 +49,5 @@ airflow/*.pid
 
 # Docker / local
 docker-compose.override.yml
+.vercel
+.env*
